@@ -1,0 +1,38 @@
+select distinct
+kyc_pan_status_check, count(*) as status_count,
+sum(count(distinct id)) over() as Total_Customer_Count
+FROM (
+Select 
+a.id as id,
+lac.pan__c as primary_PAN_in_LAC, 
+a.pan__c as primary_PAN_in_account,
+ad.pan__c as co_app_grt_PAN_in_app_dtl, 
+acc.pan__c as co_app_grt_PAN_in_account,
+case when iic.related_applicant__C is null then IIC.pan__c end as primary_PAN_in_IIC,
+case when iic.related_applicant__c = ad.id then iic.pan__c end as co_app_grt_PAN_in_IIC,
+max(iic.lastmodifieddate),
+ case 
+when UPPER(a.pan__c) is  null then 'TOTAL PAN MISSING'
+when UPPER(a.pan__c) !~ '^[A-Z]{5}[0-9]{4}[A-Z]$'  then 'PAN FORMAT FAILED'
+when ((ad.pan__c is null and (a.pan__c != lac.pan__c or a.pan__c != iic.pan__c or lac.pan__c != iic.pan__c)) OR 
+( ad.pan__c IS NOT NULL and (ad.pan__c != iic.pan__c))) then 'PAN CONSISTENCY FAILED'
+when iic.pan_status__c != 'Active' then 'PAN STATUS INACTIVE'
+when iic.pan_name_match__c = 'false' then 'PAN NAME MISMATCH'
+when iic.pan_dob_match__c = 'No' then 'PAN DOB MISMATCH'
+Else 'PASSED ALL CHECKS'
+end as kyc_pan_status_check
+       from sfdc_ld.loan_application__c lac 
+	   inner join fcrusr.ln_acct_dtls cld  on case 
+	   when length(lac.loan_application_id__c) = 15 then substring(lac.loan_application_id__c, 9,6) 
+	   when length(lac.loan_application_id__c) = 6 then lac.loan_application_id__c else lac.loan_application_id__c end = substring(cld.cod_acct_no, 9,6) and 
+	   cld.cod_acct_stat in (10,8)  
+	   inner join sfdc_ld.account a on lac.loan__c  = a.id
+	   inner join  sfdc_ld.applicant_detail__c ad on lac.id = ad.related_loan_application__c 
+       inner join sfdc_ld.account acc on ad.related_customer__c  = acc.id
+       left join sfdc_ld.integration_information__c iic 
+             on lac.id = iic.related_loan_application__c and iic.NAME like 'PAN Verification' 
+             group by  a.id, lac.pan__c, a.pan__c, ad.pan__c, acc.pan__c, iic.related_applicant__c, 
+             iic.pan__c, ad.id, iic.pan_status__c, iic.pan_name_match__c, iic.pan_dob_match__c)
+			 AS KYC_CHECKS 
+			 group by kyc_pan_status_check order by kyc_pan_status_check desc
+
