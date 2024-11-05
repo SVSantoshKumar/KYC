@@ -1,0 +1,47 @@
+WITH AllStatuses AS (
+    SELECT 'TOTAL PAN MISSING' AS kyc_pan_status_check
+    UNION ALL
+    SELECT 'PAN FORMAT FAILED'
+    UNION ALL
+    SELECT 'PASSED ALL CHECKS'
+),
+KYC_CHECKS AS (
+    SELECT 
+        a.id AS id,
+        CASE 
+            WHEN UPPER(a.pan__c) IS NULL THEN 'TOTAL PAN MISSING'
+            WHEN UPPER(a.pan__c) !~ '^[A-Z]{5}[0-9]{4}[A-Z]$' THEN 'PAN FORMAT FAILED'
+            ELSE 'PASSED ALL CHECKS'
+        END AS kyc_pan_status_check
+		
+    FROM sfdc_ld.loan_application__c lac 
+    INNER JOIN fcrusr.ln_acct_dtls cld ON CASE 
+        WHEN LENGTH(lac.loan_application_id__c) = 15 THEN SUBSTRING(lac.loan_application_id__c, 9, 6) 
+        WHEN LENGTH(lac.loan_application_id__c) = 6 THEN lac.loan_application_id__c 
+        ELSE lac.loan_application_id__c 
+    END = SUBSTRING(cld.cod_acct_no, 9, 6) 
+    AND cld.cod_acct_stat IN (10, 8)  
+    INNER JOIN sfdc_ld.account a ON lac.loan__c = a.id
+    INNER JOIN sfdc_ld.applicant_detail__c ad ON lac.id = ad.related_loan_application__c 
+    INNER JOIN sfdc_ld.account acc ON ad.related_customer__c = acc.id
+    LEFT JOIN sfdc_ld.integration_information__c iic ON lac.id = iic.related_loan_application__c 
+    AND iic.NAME LIKE 'PAN Verification' 
+    GROUP BY a.id, lac.pan__c, a.pan__c, ad.pan__c, acc.pan__c, iic.related_applicant__c, 
+             iic.pan__c, ad.id, iic.pan_status__c, iic.pan_name_match__c, iic.pan_dob_match__c
+),
+StatusCounts AS (
+    SELECT
+        kyc_pan_status_check,
+        COUNT(*) AS status_count,
+        COUNT(DISTINCT id) AS distinct_status_count
+    FROM KYC_CHECKS
+    GROUP BY kyc_pan_status_check
+)
+SELECT
+    s.kyc_pan_status_check,
+    COALESCE(sc.status_count, 0) AS status_count,
+    COALESCE(sc.distinct_status_count, 0) AS distinct_status_count,
+    SUM(COALESCE(sc.distinct_status_count, 0)) OVER() AS Total_Customer_Count
+FROM AllStatuses s
+LEFT JOIN StatusCounts sc ON s.kyc_pan_status_check = sc.kyc_pan_status_check
+ORDER BY s.kyc_pan_status_check DESC;
